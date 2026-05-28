@@ -1,16 +1,14 @@
 # DynamoDB Local container for development reference.
 #
-# IMPORTANT: The `ballerinax/aws.dynamodb` client (v2.4.0) constructs its endpoint from the
-# AWS region only (`dynamodb.<region>.amazonaws.com`) and exposes no endpoint-override. As a
-# result the connector cannot be pointed at this container. The integration tests therefore
-# require real AWS credentials, supplied via `ballerina/tests/Config.toml`:
+# NOTE: The unit tests in `ballerina/tests/memory_store_test.bal` do NOT require this
+# container or AWS credentials — they run entirely against an in-memory fake
+# (`FakeDynamoDbClient`) installed via `test:mock(dynamodb:Client, ...)`.
 #
-#   accessKeyId = "<your-access-key-id>"
-#   secretAccessKey = "<your-secret-access-key>"
-#   region = "<your-aws-region>"
-#
-# This file is retained so that the test harness can target a local endpoint once the
-# underlying connector adds endpoint-override support.
+# This file is retained so that the test harness can target a local DynamoDB endpoint
+# once the upstream `ballerinax/aws.dynamodb` connector (which currently hardcodes the
+# endpoint to `dynamodb.<region>.amazonaws.com` and exposes no endpoint-override) adds
+# endpoint-override support and we want to add Docker-based integration tests on top of
+# the existing unit tests.
 services:
   dynamodb:
     image: amazon/dynamodb-local:2.5.2

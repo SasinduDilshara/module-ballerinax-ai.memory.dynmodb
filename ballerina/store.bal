@@ -1,4 +1,4 @@
-// Copyright (c) 2025, WSO2 LLC. (http://www.wso2.com).
+// Copyright (c) 2026, WSO2 LLC. (http://www.wso2.com).
 //
 // WSO2 LLC. licenses this file to you under the Apache License,
 // Version 2.0 (the "License"); you may not use this file except
@@ -70,6 +70,7 @@ public isolated class ShortTermMemoryStore {
     private final cache:Cache? cache;
     private final int maxMessagesPerKey;
     private final string tableName;
+    private final boolean consistentReads;
 
     # Initializes the DynamoDB-backed short-term memory store.
     #
@@ -81,6 +82,13 @@ public isolated class ShortTermMemoryStore {
     # + billingMode - The billing mode to request when the connector creates the table
     # + readCapacityUnits - The read capacity units to provision when `billingMode` is `dynamodb:PROVISIONED`
     # + writeCapacityUnits - The write capacity units to provision when `billingMode` is `dynamodb:PROVISIONED`
+    # + consistentReads - Whether reads against DynamoDB use strongly consistent reads. Strongly consistent reads
+    # cost twice the read capacity units of eventually consistent reads; set to `false` to halve read cost when
+    # eventual consistency is acceptable
+    # + tags - Optional tags to apply to the DynamoDB table when the connector creates it. Ignored if the table
+    # already exists
+    # + sseSpecification - Optional server-side encryption settings to apply when the connector creates the table.
+    # If omitted, the table uses the default AWS-owned encryption key. Ignored if the table already exists
     # + returns - An error if the initialization fails
     public isolated function init(dynamodb:Client|dynamodb:ConnectionConfig dynamodbClient,
             int maxMessagesPerKey = 20,
@@ -88,7 +96,10 @@ public isolated class ShortTermMemoryStore {
             string tableName = "chat_memory",
             dynamodb:BillingMode billingMode = dynamodb:PAY_PER_REQUEST,
             int readCapacityUnits = 5,
-            int writeCapacityUnits = 5) returns Error? {
+            int writeCapacityUnits = 5,
+            boolean consistentReads = true,
+            dynamodb:Tag[]? tags = (),
+            dynamodb:SSESpecification? sseSpecification = ()) returns Error? {
         if !isValidTableName(tableName) {
             return error(string `Invalid table name: '${tableName}'.`
                 + " Table name must be 3-255 characters long and can only contain "
@@ -106,7 +117,8 @@ public isolated class ShortTermMemoryStore {
         }
         self.maxMessagesPerKey = maxMessagesPerKey;
         self.cache = cacheConfig is () ? () : new (cacheConfig);
-        check self.initializeTable(billingMode, readCapacityUnits, writeCapacityUnits);
+        self.consistentReads = consistentReads;
+        check self.initializeTable(billingMode, readCapacityUnits, writeCapacityUnits, tags, sseSpecification);
     }
 
     # Retrieves the system message, if it was provided, for a given key.
@@ -280,18 +292,17 @@ public isolated class ShortTermMemoryStore {
             Key: itemKey(key, SYSTEM_MESSAGE_ID)
         };
         dynamodb:ItemDescription|error deleteResult = self.dynamodbClient->deleteItem(deleteInput);
-        if deleteResult is error {
-            self.removeCacheEntry(key);
-            return error("Failed to delete existing system message: " + deleteResult.message(), deleteResult);
-        }
-
+        // Drop only the system-message slot from the cache (on both success and
+        // failure paths) so a transient delete error does not evict the cached
+        // interactive messages along with it.
         lock {
             CachedMessages? cacheEntry = self.getCacheEntry(key);
-            if cacheEntry is CachedMessages {
-                if cacheEntry.hasKey("systemMessage") {
-                    cacheEntry.systemMessage = ();
-                }
+            if cacheEntry is CachedMessages && cacheEntry.hasKey("systemMessage") {
+                cacheEntry.systemMessage = ();
             }
+        }
+        if deleteResult is error {
+            return error("Failed to delete existing system message: " + deleteResult.message(), deleteResult);
         }
     }
 
@@ -320,7 +331,10 @@ public isolated class ShortTermMemoryStore {
                 }
             }
         } on fail Error err {
-            self.removeCacheEntry(key);
+            // Leave the cache untouched on error so a transient delete failure does
+            // not evict the cached system message. The cache may be stale until the
+            // caller retries the delete (or the cache TTL expires), but the working
+            // set is preserved.
             return error("Failed to delete chat messages: " + err.message(), err);
         }
 
@@ -372,7 +386,8 @@ public isolated class ShortTermMemoryStore {
 
     // Ensures the backing table exists and is active, creating it if necessary.
     private isolated function initializeTable(dynamodb:BillingMode billingMode, int readCapacityUnits,
-            int writeCapacityUnits) returns Error? {
+            int writeCapacityUnits, dynamodb:Tag[]? tags, dynamodb:SSESpecification? sseSpecification)
+            returns Error? {
         dynamodb:TableDescription|error existing = self.dynamodbClient->describeTable(self.tableName);
         if existing is dynamodb:TableDescription {
             return self.waitForTableActive();
@@ -399,6 +414,12 @@ public isolated class ShortTermMemoryStore {
                 ReadCapacityUnits: readCapacityUnits,
                 WriteCapacityUnits: writeCapacityUnits
             };
+        }
+        if tags is dynamodb:Tag[] && tags.length() > 0 {
+            createInput.Tags = tags;
+        }
+        if sseSpecification is dynamodb:SSESpecification {
+            createInput.SSESpecification = sseSpecification;
         }
 
         dynamodb:TableDescription|error created = self.dynamodbClient->createTable(createInput);
@@ -433,7 +454,9 @@ public isolated class ShortTermMemoryStore {
         dynamodb:ItemGetInput getInput = {
             TableName: self.tableName,
             Key: itemKey(key, sortId),
-            ConsistentRead: true
+            ConsistentRead: self.consistentReads,
+            ProjectionExpression: "#body",
+            ExpressionAttributeNames: {"#body": BODY_ATTRIBUTE}
         };
         dynamodb:ItemGetOutput|error result = self.dynamodbClient->getItem(getInput);
         if result is error {
@@ -469,6 +492,26 @@ public isolated class ShortTermMemoryStore {
         }
         int endSequence = check self.incrementCounter(key, bodies.length());
         int startSequence = endSequence - bodies.length() + 1;
+
+        // The hot path is `put(key, oneMessage)`. A 1-item BatchWriteItem carries the
+        // `RequestItems` map wrapper and the `UnprocessedItems` retry plumbing for no
+        // benefit, so fall through to a direct PutItem here.
+        if bodies.length() == 1 {
+            string sortId = INTERACTIVE_ID_PREFIX + paddedSequence(startSequence);
+            dynamodb:ItemCreateInput createInput = {
+                TableName: self.tableName,
+                Item: {
+                    [PARTITION_KEY_ATTRIBUTE]: {S: key},
+                    [SORT_KEY_ATTRIBUTE]: {S: sortId},
+                    [BODY_ATTRIBUTE]: {S: bodies[0]}
+                }
+            };
+            dynamodb:ItemDescription|error result = self.dynamodbClient->createItem(createInput);
+            if result is error {
+                return error("Failed to append interactive message: " + result.message(), result);
+            }
+            return;
+        }
 
         dynamodb:WriteRequest[] writeRequests = [];
         foreach int i in 0 ..< bodies.length() {
@@ -522,7 +565,7 @@ public isolated class ShortTermMemoryStore {
         do {
             dynamodb:QueryInput queryInput = {
                 TableName: self.tableName,
-                ConsistentRead: true,
+                ConsistentRead: self.consistentReads,
                 ProjectionExpression: "#sk",
                 KeyConditionExpression: "#pk = :pk and begins_with(#sk, :prefix)",
                 ExpressionAttributeNames: {"#pk": PARTITION_KEY_ATTRIBUTE, "#sk": SORT_KEY_ATTRIBUTE},
@@ -548,7 +591,7 @@ public isolated class ShortTermMemoryStore {
         do {
             dynamodb:QueryInput queryInput = interactiveOnly ? {
                     TableName: self.tableName,
-                    ConsistentRead: true,
+                    ConsistentRead: self.consistentReads,
                     ScanIndexForward: true,
                     ProjectionExpression: "#sk",
                     KeyConditionExpression: "#pk = :pk and begins_with(#sk, :prefix)",
@@ -556,7 +599,7 @@ public isolated class ShortTermMemoryStore {
                     ExpressionAttributeValues: {":pk": {S: key}, ":prefix": {S: INTERACTIVE_ID_PREFIX}}
                 } : {
                     TableName: self.tableName,
-                    ConsistentRead: true,
+                    ConsistentRead: self.consistentReads,
                     ScanIndexForward: true,
                     ProjectionExpression: "#sk",
                     KeyConditionExpression: "#pk = :pk",
@@ -586,32 +629,60 @@ public isolated class ShortTermMemoryStore {
     }
 
     // Loads all messages for a key from DynamoDB and populates the cache on a miss.
+    //
+    // A single `Query` on the partition key returns the system item, the counter item,
+    // and every interactive item in one round trip. With `ScanIndexForward: true` the
+    // stored sort keys ("counter" < "msg#…" < "system" lexicographically) come back in
+    // an order that lets us classify each row by its sort-key prefix and skip the
+    // counter row, while preserving chronological order of the interactive items.
     private isolated function cacheFromDynamoDb(string key)
             returns readonly & ([ai:ChatSystemMessage, ai:ChatInteractiveMessage...]|ai:ChatInteractiveMessage[])|Error {
         do {
-            // Retrieve system message
-            (ai:ChatSystemMessage & readonly)? systemMessage = ();
-            string|Error? systemMessageJson = self.getMessageBody(key, SYSTEM_MESSAGE_ID);
-            if systemMessageJson is Error {
-                return error("Failed to retrieve system message: " + systemMessageJson.message(), systemMessageJson);
-            }
-            if systemMessageJson is string {
-                ChatSystemMessageDatabaseMessage|error dbMessage = systemMessageJson.fromJsonStringWithType();
-                if dbMessage is error {
-                    return error("Failed to parse system message from DynamoDB: " + dbMessage.message(), dbMessage);
-                }
-                systemMessage = transformFromSystemMessageDatabaseMessage(dbMessage);
-            }
+            dynamodb:QueryInput queryInput = {
+                TableName: self.tableName,
+                ConsistentRead: self.consistentReads,
+                ScanIndexForward: true,
+                KeyConditionExpression: "#pk = :pk",
+                ExpressionAttributeNames: {"#pk": PARTITION_KEY_ATTRIBUTE},
+                ExpressionAttributeValues: {":pk": {S: key}}
+            };
+            stream<dynamodb:QueryOutput, error?> resultStream = check self.dynamodbClient->query(queryInput);
 
-            // Retrieve interactive messages
+            (ai:ChatSystemMessage & readonly)? systemMessage = ();
             (ai:ChatInteractiveMessage & readonly)[] interactiveMessages = [];
-            string[] interactiveJsonList = check self.queryInteractiveBodies(key);
-            foreach string msgJson in interactiveJsonList {
-                ChatInteractiveMessageDatabaseMessage|error dbMessage = msgJson.fromJsonStringWithType();
-                if dbMessage is error {
-                    return error("Failed to parse chat message from DynamoDB: " + dbMessage.message(), dbMessage);
+
+            while true {
+                record {|dynamodb:QueryOutput value;|}? next = check resultStream.next();
+                if next is () {
+                    break;
                 }
-                interactiveMessages.push(transformFromInteractiveMessageDatabaseMessage(dbMessage));
+                map<dynamodb:AttributeValue>? item = next.value?.Item;
+                if item is () {
+                    continue;
+                }
+                dynamodb:AttributeValue? sortKeyAttr = item[SORT_KEY_ATTRIBUTE];
+                string? sortId = sortKeyAttr is () ? () : sortKeyAttr?.S;
+                if sortId is () || sortId == COUNTER_MESSAGE_ID {
+                    continue;
+                }
+
+                if sortId == SYSTEM_MESSAGE_ID {
+                    string body = check extractBody(item);
+                    ChatSystemMessageDatabaseMessage|error dbMessage = body.fromJsonStringWithType();
+                    if dbMessage is error {
+                        return error("Failed to parse system message from DynamoDB: " + dbMessage.message(),
+                            dbMessage);
+                    }
+                    systemMessage = transformFromSystemMessageDatabaseMessage(dbMessage);
+                } else if sortId.startsWith(INTERACTIVE_ID_PREFIX) {
+                    string body = check extractBody(item);
+                    ChatInteractiveMessageDatabaseMessage|error dbMessage = body.fromJsonStringWithType();
+                    if dbMessage is error {
+                        return error("Failed to parse chat message from DynamoDB: " + dbMessage.message(),
+                            dbMessage);
+                    }
+                    interactiveMessages.push(transformFromInteractiveMessageDatabaseMessage(dbMessage));
+                }
             }
 
             final ai:ChatInteractiveMessage[] & readonly immutableInteractiveMessages =
@@ -630,35 +701,6 @@ public isolated class ShortTermMemoryStore {
             return [systemMessage, ...interactiveMessages];
         } on fail error err {
             return error("Failed to retrieve chat messages: " + err.message(), err);
-        }
-    }
-
-    // Retrieves the JSON bodies of every interactive message for a key, in insertion order.
-    private isolated function queryInteractiveBodies(string key) returns string[]|Error {
-        do {
-            dynamodb:QueryInput queryInput = {
-                TableName: self.tableName,
-                ConsistentRead: true,
-                ScanIndexForward: true,
-                KeyConditionExpression: "#pk = :pk and begins_with(#sk, :prefix)",
-                ExpressionAttributeNames: {"#pk": PARTITION_KEY_ATTRIBUTE, "#sk": SORT_KEY_ATTRIBUTE},
-                ExpressionAttributeValues: {":pk": {S: key}, ":prefix": {S: INTERACTIVE_ID_PREFIX}}
-            };
-            stream<dynamodb:QueryOutput, error?> resultStream = check self.dynamodbClient->query(queryInput);
-            string[] bodies = [];
-            while true {
-                record {|dynamodb:QueryOutput value;|}? next = check resultStream.next();
-                if next is () {
-                    break;
-                }
-                map<dynamodb:AttributeValue>? item = next.value?.Item;
-                if item is map<dynamodb:AttributeValue> {
-                    bodies.push(check extractBody(item));
-                }
-            }
-            return bodies;
-        } on fail error err {
-            return error("Failed to retrieve interactive messages from DynamoDB: " + err.message(), err);
         }
     }
 
