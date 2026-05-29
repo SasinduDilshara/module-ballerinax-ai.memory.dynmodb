@@ -70,13 +70,13 @@ import ballerinax/aws.dynamodb;
     ai:ShortTermMemoryStore store = check new dynamodbStore:ShortTermMemoryStore(dynamodbClient);
     ```
 
-    Optionally, specify the maximum number of messages per key (`maxMessagesPerKey` - defaults to `20`), the in-memory cache configuration (`cacheConfig`), a custom table name (`tableName` - defaults to `"chat_memory"`), and the billing mode used when the connector creates the table (`billingMode` - defaults to `dynamodb:PAY_PER_REQUEST`, with `readCapacityUnits`/`writeCapacityUnits` applied only when `billingMode` is `dynamodb:PROVISIONED`).
+    Optionally, specify the maximum number of messages per key (`maxMessagesPerKey` - defaults to `20`), the in-memory cache configuration (`cacheConfig`), and the table-level configuration via `tableConfig` (a `dynamodb:TableConfig` record). `tableConfig` groups the DynamoDB-specific settings: the table name (`tableName` - defaults to `"chat_memory"`), the billing mode used when the connector creates the table (`billingMode` - defaults to `dynamodb:PAY_PER_REQUEST`, with `readCapacityUnits`/`writeCapacityUnits` applied only when `billingMode` is `dynamodb:PROVISIONED`), the read consistency model (`consistentReads`), and optional `tags` and `sseSpecification` applied at table creation.
 
     ```ballerina
     ai:ShortTermMemoryStore store = check new dynamodb:ShortTermMemoryStore({
         awsCredentials: {accessKeyId, secretAccessKey},
         region
-    }, 10, {capacity: 10}, "my_app_memory");
+    }, 10, {capacity: 10}, tableConfig = {tableName: "my_app_memory"});
     ```
 
 ## Storage model

@@ -24,6 +24,43 @@ import ballerinax/aws.dynamodb;
 # Represents a distinct error type for memory store errors.
 public type Error distinct ai:MemoryError;
 
+# Configuration for the DynamoDB table that backs the short-term memory store.
+#
+# + tableName - The name of the DynamoDB table used to store chat messages.
+# Must be 3-255 characters long and contain only letters, digits, underscores, dots, and hyphens
+# + createTableIfNotExists - Whether the store should create the backing table when it does not
+# already exist. Defaults to `true`. When `true`, initialization calls `DescribeTable` (and
+# `CreateTable` if the table is absent), which requires the `dynamodb:DescribeTable` and
+# `dynamodb:CreateTable` IAM permissions. Set to `false` when the table is provisioned out of band
+# (e.g. via IaC) and the runtime role is restricted to data-plane permissions; in that case the
+# store performs no control-plane calls during initialization and assumes the table already exists
+# + billingMode - The billing mode to request when the connector creates the table. Defaults to
+# `dynamodb:PAY_PER_REQUEST` (on-demand). Note that this differs from the AWS `CreateTable` API
+# default of `PROVISIONED`; set this explicitly to `dynamodb:PROVISIONED` (and provide
+# `readCapacityUnits`/`writeCapacityUnits`) for provisioned-capacity tables. Ignored when
+# `createTableIfNotExists` is `false` or the table already exists
+# + readCapacityUnits - The read capacity units to provision when `billingMode` is `dynamodb:PROVISIONED`
+# + writeCapacityUnits - The write capacity units to provision when `billingMode` is `dynamodb:PROVISIONED`
+# + consistentReads - Whether reads against DynamoDB use strongly consistent reads. Defaults to `false`
+# (eventually consistent), matching the DynamoDB default. Strongly consistent reads cost twice the read
+# capacity units of eventually consistent reads, and the in-memory cache absorbs the brief staleness
+# window in the common single-actor case; set to `true` only when strong consistency is required
+# + tags - Optional tags to apply to the DynamoDB table when the connector creates it. Ignored if the
+# table already exists
+# + sseSpecification - Optional server-side encryption settings to apply when the connector creates
+# the table. If omitted, the table uses the default AWS-owned encryption key. Ignored if the table
+# already exists
+public type TableConfig record {|
+    string tableName = "chat_memory";
+    boolean createTableIfNotExists = true;
+    dynamodb:BillingMode billingMode = dynamodb:PAY_PER_REQUEST;
+    int readCapacityUnits = 5;
+    int writeCapacityUnits = 5;
+    boolean consistentReads = false;
+    dynamodb:Tag[]? tags = ();
+    dynamodb:SSESpecification? sseSpecification = ();
+|};
+
 // The name of the partition (HASH) key attribute. Holds the memory/session key.
 const string PARTITION_KEY_ATTRIBUTE = "MemoryKey";
 // The name of the sort (RANGE) key attribute. Holds the per-item message identifier.
@@ -53,7 +90,10 @@ const int MAX_BATCH_WRITE_RETRIES = 5;
 const decimal BATCH_WRITE_BASE_DELAY = 0.1;
 const decimal BATCH_WRITE_MAX_DELAY = 20.0;
 // The maximum number of polls while waiting for a newly created table to become active.
-const int MAX_TABLE_ACTIVATION_RETRIES = 30;
+// 300 × 2s ≈ 10 minutes, matching the AWS Java SDK v2 `tableExists` waiter default — long
+// enough to absorb slow first-creates in some regions, while the short interval keeps
+// detection latency low when activation is fast.
+const int MAX_TABLE_ACTIVATION_RETRIES = 300;
 const decimal TABLE_ACTIVATION_RETRY_INTERVAL = 2;
 
 type CachedMessages record {|
@@ -77,35 +117,31 @@ public isolated class ShortTermMemoryStore {
     # + dynamodbClient - The DynamoDB client or connection configuration to connect to DynamoDB
     # + maxMessagesPerKey - The maximum number of interactive messages to store per key
     # + cacheConfig - The cache configuration for in-memory caching of messages
-    # + tableName - The name of the DynamoDB table used to store chat messages (default: "chat_memory").
-    # Must be 3-255 characters long and contain only letters, digits, underscores, dots, and hyphens.
-    # + billingMode - The billing mode to request when the connector creates the table
-    # + readCapacityUnits - The read capacity units to provision when `billingMode` is `dynamodb:PROVISIONED`
-    # + writeCapacityUnits - The write capacity units to provision when `billingMode` is `dynamodb:PROVISIONED`
-    # + consistentReads - Whether reads against DynamoDB use strongly consistent reads. Strongly consistent reads
-    # cost twice the read capacity units of eventually consistent reads; set to `false` to halve read cost when
-    # eventual consistency is acceptable
-    # + tags - Optional tags to apply to the DynamoDB table when the connector creates it. Ignored if the table
-    # already exists
-    # + sseSpecification - Optional server-side encryption settings to apply when the connector creates the table.
-    # If omitted, the table uses the default AWS-owned encryption key. Ignored if the table already exists
+    # + tableConfig - Configuration for the DynamoDB table that backs the store, including the table
+    # name, whether to auto-create the table, billing mode, provisioned throughput, read consistency,
+    # tags, and server-side encryption
     # + returns - An error if the initialization fails
     public isolated function init(dynamodb:Client|dynamodb:ConnectionConfig dynamodbClient,
             int maxMessagesPerKey = 20,
             cache:CacheConfig? cacheConfig = (),
-            string tableName = "chat_memory",
-            dynamodb:BillingMode billingMode = dynamodb:PAY_PER_REQUEST,
-            int readCapacityUnits = 5,
-            int writeCapacityUnits = 5,
-            boolean consistentReads = true,
-            dynamodb:Tag[]? tags = (),
-            dynamodb:SSESpecification? sseSpecification = ()) returns Error? {
-        if !isValidTableName(tableName) {
-            return error(string `Invalid table name: '${tableName}'.`
+            TableConfig tableConfig = {}) returns Error? {
+        if !isValidTableName(tableConfig.tableName) {
+            return error(string `Invalid table name: '${tableConfig.tableName}'.`
                 + " Table name must be 3-255 characters long and can only contain "
                 + "letters, digits, underscores, dots, and hyphens.");
         }
-        self.tableName = tableName;
+        if maxMessagesPerKey < 1 {
+            return error(string `Invalid maxMessagesPerKey: '${maxMessagesPerKey}'.`
+                + " It must be a positive integer.");
+        }
+        if tableConfig.billingMode == dynamodb:PROVISIONED
+                && (tableConfig.readCapacityUnits < 1 || tableConfig.writeCapacityUnits < 1) {
+            return error(string `Invalid provisioned throughput: readCapacityUnits `
+                + string `'${tableConfig.readCapacityUnits}' and writeCapacityUnits `
+                + string `'${tableConfig.writeCapacityUnits}' must both be positive integers `
+                + "when billingMode is dynamodb:PROVISIONED.");
+        }
+        self.tableName = tableConfig.tableName;
         if dynamodbClient is dynamodb:Client {
             self.dynamodbClient = dynamodbClient;
         } else {
@@ -117,8 +153,10 @@ public isolated class ShortTermMemoryStore {
         }
         self.maxMessagesPerKey = maxMessagesPerKey;
         self.cache = cacheConfig is () ? () : new (cacheConfig);
-        self.consistentReads = consistentReads;
-        check self.initializeTable(billingMode, readCapacityUnits, writeCapacityUnits, tags, sseSpecification);
+        self.consistentReads = tableConfig.consistentReads;
+        if tableConfig.createTableIfNotExists {
+            check self.initializeTable(tableConfig);
+        }
     }
 
     # Retrieves the system message, if it was provided, for a given key.
@@ -385,9 +423,7 @@ public isolated class ShortTermMemoryStore {
     }
 
     // Ensures the backing table exists and is active, creating it if necessary.
-    private isolated function initializeTable(dynamodb:BillingMode billingMode, int readCapacityUnits,
-            int writeCapacityUnits, dynamodb:Tag[]? tags, dynamodb:SSESpecification? sseSpecification)
-            returns Error? {
+    private isolated function initializeTable(TableConfig tableConfig) returns Error? {
         dynamodb:TableDescription|error existing = self.dynamodbClient->describeTable(self.tableName);
         if existing is dynamodb:TableDescription {
             return self.waitForTableActive();
@@ -407,17 +443,19 @@ public isolated class ShortTermMemoryStore {
                 {AttributeName: PARTITION_KEY_ATTRIBUTE, KeyType: dynamodb:HASH},
                 {AttributeName: SORT_KEY_ATTRIBUTE, KeyType: dynamodb:RANGE}
             ],
-            BillingMode: billingMode
+            BillingMode: tableConfig.billingMode
         };
-        if billingMode == dynamodb:PROVISIONED {
+        if tableConfig.billingMode == dynamodb:PROVISIONED {
             createInput.ProvisionedThroughput = {
-                ReadCapacityUnits: readCapacityUnits,
-                WriteCapacityUnits: writeCapacityUnits
+                ReadCapacityUnits: tableConfig.readCapacityUnits,
+                WriteCapacityUnits: tableConfig.writeCapacityUnits
             };
         }
+        dynamodb:Tag[]? tags = tableConfig.tags;
         if tags is dynamodb:Tag[] && tags.length() > 0 {
             createInput.Tags = tags;
         }
+        dynamodb:SSESpecification? sseSpecification = tableConfig.sseSpecification;
         if sseSpecification is dynamodb:SSESpecification {
             createInput.SSESpecification = sseSpecification;
         }

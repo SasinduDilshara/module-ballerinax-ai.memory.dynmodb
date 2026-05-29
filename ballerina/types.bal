@@ -65,18 +65,6 @@ isolated function transformToDatabaseMessage(ai:ChatMessage message) returns Cha
     };
 }
 
-isolated function transformFromDatabaseMessage(ChatMessageDatabaseMessage dbMessage) returns ai:ChatMessage {
-    if dbMessage is ChatSystemMessageDatabaseMessage {
-        return transformFromSystemMessageDatabaseMessage(dbMessage);
-    }
-    if dbMessage is ChatInteractiveMessageDatabaseMessage {
-        return transformFromInteractiveMessageDatabaseMessage(dbMessage);
-    }
-    // This branch is unreachable given the current ChatMessageDatabaseMessage union definition,
-    // but is required for exhaustiveness.
-    panic error("Unexpected ChatMessageDatabaseMessage type");
-}
-
 isolated function transformFromSystemMessageDatabaseMessage(ChatSystemMessageDatabaseMessage dbMessage)
         returns ai:ChatSystemMessage & readonly {
     string|Prompt content = dbMessage.content;

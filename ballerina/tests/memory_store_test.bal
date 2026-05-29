@@ -96,7 +96,7 @@ function testInitRejectsInvalidTableName() returns error? {
     var [_, mocked] = newFakePair();
     string[] invalidNames = ["ab", "has space", "exclaim!", "two/parts"];
     foreach string name in invalidNames {
-        Error|ShortTermMemoryStore result = new ShortTermMemoryStore(mocked, tableName = name);
+        Error|ShortTermMemoryStore result = new ShortTermMemoryStore(mocked, tableConfig = {tableName: name});
         test:assertTrue(result is Error,
             string `Expected init to fail for invalid table name '${name}'`);
     }
@@ -106,7 +106,7 @@ function testInitRejectsInvalidTableName() returns error? {
 function testInitAcceptsValidTableName() returns error? {
     var [fake, mocked] = newFakePair();
     string customTable = "custom.memory-table_1";
-    _ = check new ShortTermMemoryStore(mocked, tableName = customTable);
+    _ = check new ShortTermMemoryStore(mocked, tableConfig = {tableName: customTable});
     test:assertTrue(fake.hasTable(customTable),
         string `Store must create the requested custom table '${customTable}'`);
 }
@@ -520,7 +520,7 @@ function testKeysAreIsolated() returns error? {
 function testCustomTableNameWritesToThatTable() returns error? {
     var [fake, mocked] = newFakePair();
     string custom = "custom_memory_table";
-    ShortTermMemoryStore store = check new (mocked, tableName = custom);
+    ShortTermMemoryStore store = check new (mocked, tableConfig = {tableName: custom});
 
     check store.put(K1, SYSTEM_WEATHER);
     check store.put(K1, USER_INTRO);
@@ -536,8 +536,8 @@ function testCustomTableNameWritesToThatTable() returns error? {
 @test:Config {}
 function testTwoStoresOnDifferentTablesAreIsolated() returns error? {
     var [_, mocked] = newFakePair();
-    ShortTermMemoryStore storeA = check new (mocked, tableName = "memory_a");
-    ShortTermMemoryStore storeB = check new (mocked, tableName = "memory_b");
+    ShortTermMemoryStore storeA = check new (mocked, tableConfig = {tableName: "memory_a"});
+    ShortTermMemoryStore storeB = check new (mocked, tableConfig = {tableName: "memory_b"});
 
     check storeA.put(K1, USER_INTRO);
     check storeB.put(K1, USER_K2);

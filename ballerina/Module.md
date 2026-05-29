@@ -74,8 +74,12 @@ import ballerinax/aws.dynamodb;
 dynamodb:ShortTermMemoryStore store = check new ({
     awsCredentials: {accessKeyId: "...", secretAccessKey: "..."},
     region: "us-east-1"
-}, tableName = "my_app_memory", billingMode = dynamodb:PROVISIONED,
-   readCapacityUnits = 10, writeCapacityUnits = 10);
+}, tableConfig = {
+    tableName: "my_app_memory",
+    billingMode: dynamodb:PROVISIONED,
+    readCapacityUnits: 10,
+    writeCapacityUnits: 10
+});
 ```
 
 ## License
