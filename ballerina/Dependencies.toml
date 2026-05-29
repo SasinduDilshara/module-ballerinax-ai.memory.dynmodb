@@ -415,7 +415,7 @@ dependencies = [
 
 [[package]]
 org = "ballerinax"
-name = "ai.memory.dynamodb"
+name = "ai.memory.aws.dynamodb"
 version = "1.0.0"
 dependencies = [
 	{org = "ballerina", name = "ai"},
@@ -427,13 +427,13 @@ dependencies = [
 	{org = "ballerinax", name = "aws.dynamodb"}
 ]
 modules = [
-	{org = "ballerinax", packageName = "ai.memory.dynamodb", moduleName = "ai.memory.dynamodb"}
+	{org = "ballerinax", packageName = "ai.memory.aws.dynamodb", moduleName = "ai.memory.aws.dynamodb"}
 ]
 
 [[package]]
 org = "ballerinax"
 name = "aws.dynamodb"
-version = "2.4.0"
+version = "2.3.0"
 dependencies = [
 	{org = "ballerina", name = "crypto"},
 	{org = "ballerina", name = "http"},

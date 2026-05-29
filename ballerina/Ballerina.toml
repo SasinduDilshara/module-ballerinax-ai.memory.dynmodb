@@ -1,13 +1,14 @@
 [package]
 distribution = "2201.12.0"
 org = "ballerinax"
-name = "ai.memory.dynamodb"
+name = "ai.memory.aws.dynamodb"
 version = "1.0.0"
 license = ["Apache-2.0"]
 authors = ["Ballerina"]
 keywords = ["Type/Connector", "Vendor/Amazon", "Area/AI & Machine Learning", "Area/Database", "Type/Short Term Memory Store"]
-repository = "https://github.com/ballerina-platform/module-ballerinax-ai.memory.dynamodb"
+repository = "https://github.com/ballerina-platform/module-ballerinax-ai.memory.aws.dynamodb"
 icon="icon.png"
+visibility = "private"
 
 [platform.java21]
 graalvmCompatible = true
