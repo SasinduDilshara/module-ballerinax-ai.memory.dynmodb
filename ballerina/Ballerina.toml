@@ -8,7 +8,6 @@ authors = ["Ballerina"]
 keywords = ["Type/Connector", "Vendor/Amazon", "Area/AI & Machine Learning", "Area/Database", "Type/Short Term Memory Store"]
 repository = "https://github.com/ballerina-platform/module-ballerinax-ai.memory.aws.dynamodb"
 icon="icon.png"
-visibility = "private"
 
 [platform.java21]
 graalvmCompatible = true

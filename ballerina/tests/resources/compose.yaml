@@ -1,0 +1,17 @@
+# NOTE: The `ballerinax/aws.dynamodb` client builds its endpoint from the AWS region only and
+# has no endpoint-override, so it cannot target this local DynamoDB container. This compose file
+# is provided for reference and for spinning up DynamoDB Local during development; the integration
+# tests require real AWS credentials supplied via `ballerina/tests/Config.toml`
+# (accessKeyId, secretAccessKey, region).
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: dynamodb-local
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8000 > /dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

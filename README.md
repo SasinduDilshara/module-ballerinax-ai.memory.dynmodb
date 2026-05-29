@@ -1,8 +1,8 @@
 # Ballerina DynamoDB-backed short-term chat message store connector
 
-[![Build](https://github.com/ballerina-platform/module-ballerinax-ai.memory.dynamodb/actions/workflows/ci.yml/badge.svg)](https://github.com/ballerina-platform/module-ballerinax-ai.memory.dynamodb/actions/workflows/ci.yml)
-[![GitHub Last Commit](https://img.shields.io/github/last-commit/ballerina-platform/module-ballerinax-ai.memory.dynamodb.svg)](https://github.com/ballerina-platform/module-ballerinax-ai.memory.dynamodb/commits/main)
-[![GitHub Issues](https://img.shields.io/github/issues/ballerina-platform/ballerina-library/module/ai.memory.dynamodb.svg?label=Open%20Issues)](https://github.com/ballerina-platform/ballerina-library/labels/module%2Fai.memory.dynamodb)
+[![Build](https://github.com/ballerina-platform/module-ballerinax-ai.memory.aws.dynamodb/actions/workflows/ci.yml/badge.svg)](https://github.com/ballerina-platform/module-ballerinax-ai.memory.aws.dynamodb/actions/workflows/ci.yml)
+[![GitHub Last Commit](https://img.shields.io/github/last-commit/ballerina-platform/module-ballerinax-ai.memory.aws.dynamodb.svg)](https://github.com/ballerina-platform/module-ballerinax-ai.memory.aws.dynamodb/commits/main)
+[![GitHub Issues](https://img.shields.io/github/issues/ballerina-platform/ballerina-library/module/ai.memory.aws.dynamodb.svg?label=Open%20Issues)](https://github.com/ballerina-platform/ballerina-library/labels/module%2Fai.memory.aws.dynamodb)
 
 ## Overview
 
@@ -17,10 +17,10 @@ This module provides an Amazon DynamoDB-backed short-term memory store to use wi
 
 Follow the steps below to use this store in your Ballerina application:
 
-1. Import the `ballerinax/ai.memory.dynamodb` module.
+1. Import the `ballerinax/ai.memory.aws.dynamodb` module.
 
 ```ballerina
-import ballerinax/ai.memory.dynamodb;
+import ballerinax/ai.memory.aws.dynamodb;
 ```
 
 Optionally, import the `ballerina/ai` and/or `ballerinax/aws.dynamodb` module(s).
@@ -36,7 +36,7 @@ import ballerinax/aws.dynamodb;
 
     ```ballerina
     import ballerina/ai;
-    import ballerinax/ai.memory.dynamodb;
+    import ballerinax/ai.memory.aws.dynamodb;
 
     configurable string accessKeyId = ?;
     configurable string secretAccessKey = ?;
@@ -53,7 +53,7 @@ import ballerinax/aws.dynamodb;
     ```ballerina
     import ballerina/ai;
     import ballerinax/aws.dynamodb;
-    import ballerinax/ai.memory.dynamodb as dynamodbStore;
+    import ballerinax/ai.memory.aws.dynamodb as dynamodbStore;
 
     configurable string accessKeyId = ?;
     configurable string secretAccessKey = ?;
@@ -77,7 +77,7 @@ import ballerinax/aws.dynamodb;
 
 ## Examples
 
-The `ai.memory.dynamodb` connector provides a practical example illustrating usage in a real-world scenario.
+The `ai.memory.aws.dynamodb` connector provides a practical example illustrating usage in a real-world scenario.
 
 1. [Chat memory with an agent](examples/chat-memory-with-agent) - Wire the DynamoDB-backed store into an `ai:Agent` and run a multi-turn conversation that persists across turns.
 
@@ -165,7 +165,7 @@ All the contributors are encouraged to read the [Ballerina Code of Conduct](http
 
 ## Useful links
 
-* For more information go to the [`ai.memory.dynamodb` package](https://central.ballerina.io/ballerinax/ai.memory.dynamodb/latest).
+* For more information go to the [`ai.memory.aws.dynamodb` package](https://central.ballerina.io/ballerinax/ai.memory.aws.dynamodb/latest).
 * For example demonstrations of the usage, go to [Ballerina By Examples](https://ballerina.io/learn/by-example/).
 * Chat live with us via our [Discord server](https://discord.gg/ballerinalang).
 * Post all technical questions on Stack Overflow with the [#ballerina](https://stackoverflow.com/questions/tagged/ballerina) tag.

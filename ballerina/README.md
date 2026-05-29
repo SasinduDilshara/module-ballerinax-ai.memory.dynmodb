@@ -21,10 +21,10 @@ This module provides a DynamoDB-backed short-term memory store to use with AI me
 
 Follow the steps below to use this store in your Ballerina application:
 
-1. Import the `ballerinax/ai.memory.dynamodb` module.
+1. Import the `ballerinax/ai.memory.aws.dynamodb` module.
 
 ```ballerina
-import ballerinax/ai.memory.dynamodb;
+import ballerinax/ai.memory.aws.dynamodb;
 ```
 
 Optionally, import the `ballerina/ai` and/or `ballerinax/aws.dynamodb` module(s).
@@ -40,7 +40,7 @@ import ballerinax/aws.dynamodb;
 
     ```ballerina
     import ballerina/ai;
-    import ballerinax/ai.memory.dynamodb;
+    import ballerinax/ai.memory.aws.dynamodb;
 
     configurable string accessKeyId = ?;
     configurable string secretAccessKey = ?;
@@ -57,7 +57,7 @@ import ballerinax/aws.dynamodb;
     ```ballerina
     import ballerina/ai;
     import ballerinax/aws.dynamodb;
-    import ballerinax/ai.memory.dynamodb as dynamodbStore;
+    import ballerinax/ai.memory.aws.dynamodb as dynamodbStore;
 
     configurable string accessKeyId = ?;
     configurable string secretAccessKey = ?;

@@ -22,7 +22,7 @@ This Ballerina module provides an Amazon DynamoDB-backed short-term memory store
 ### Configuration-based Setup
 
 ```ballerina
-import ballerinax/ai.memory.dynamodb;
+import ballerinax/ai.memory.aws.dynamodb;
 
 dynamodb:ShortTermMemoryStore store = check new ({
     awsCredentials: {accessKeyId: "...", secretAccessKey: "..."},
@@ -33,7 +33,7 @@ dynamodb:ShortTermMemoryStore store = check new ({
 ### Client-based Setup
 
 ```ballerina
-import ballerinax/ai.memory.dynamodb;
+import ballerinax/ai.memory.aws.dynamodb;
 import ballerinax/aws.dynamodb as dynamodbClient;
 
 dynamodbClient:Client cl = check new ({

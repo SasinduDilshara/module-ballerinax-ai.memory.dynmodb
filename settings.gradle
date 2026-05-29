@@ -28,11 +28,11 @@ plugins {
     id "com.gradle.enterprise" version "${gradleEnterprisePluginVersion}"
 }
 
-rootProject.name = 'module-ballerinax-ai.memory.dynamodb'
+rootProject.name = 'module-ballerinax-ai.memory.aws.dynamodb'
 
-include ':ai.memory.dynamodb-ballerina'
+include ':ai.memory.aws.dynamodb-ballerina'
 
-project(':ai.memory.dynamodb-ballerina').projectDir = file("ballerina")
+project(':ai.memory.aws.dynamodb-ballerina').projectDir = file("ballerina")
 
 gradleEnterprise {
     buildScan {

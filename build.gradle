@@ -58,7 +58,7 @@ allprojects {
 def moduleVersion = project.version.replace("-SNAPSHOT", "")
 
 task build {
-    dependsOn(':ai.memory.dynamodb-ballerina:build')
+    dependsOn(':ai.memory.aws.dynamodb-ballerina:build')
 }
 
 release {
