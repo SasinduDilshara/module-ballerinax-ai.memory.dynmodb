@@ -33,7 +33,60 @@ isolated class FakeStorage {
     // Counter key (`tableName + DELIM + partition`) -> last issued sequence value.
     private map<int> counters = {};
 
+    // ----- Fault-injection knobs (configured by tests before exercising the
+    // store). Both default to 0, so unless a test opts in the fake behaves like
+    // an always-healthy DynamoDB and existing tests are unaffected. -----
+
+    // While > 0, the next `writeBatchItems` call persists nothing and reports
+    // every request back as `UnprocessedItems`, then decrements. This drives the
+    // store's BatchWriteItem retry/backoff loop (`writeChunk`).
+    private int unprocessedRoundsRemaining = 0;
+    // While > 0, the next `describeTable` against an existing table reports
+    // `CREATING` instead of `ACTIVE`, then decrements. This drives the store's
+    // `waitForTableActive` polling loop after a table is created.
+    private int activationPollsRemaining = 0;
+
     isolated function init() {
+    }
+
+    // Arms `rounds` consecutive `writeBatchItems` calls to report all of their
+    // items as unprocessed (without persisting them).
+    isolated function setUnprocessedRounds(int rounds) {
+        lock {
+            self.unprocessedRoundsRemaining = rounds;
+        }
+    }
+
+    // Returns true (and consumes one round) if the current write should be
+    // faulted into an all-unprocessed response.
+    isolated function consumeUnprocessedRound() returns boolean {
+        lock {
+            if self.unprocessedRoundsRemaining <= 0 {
+                return false;
+            }
+            self.unprocessedRoundsRemaining -= 1;
+            return true;
+        }
+    }
+
+    // Arms `polls` consecutive `describeTable` calls (against an existing table)
+    // to report `CREATING` before the table is reported `ACTIVE`.
+    isolated function setActivationPolls(int polls) {
+        lock {
+            self.activationPollsRemaining = polls;
+        }
+    }
+
+    // Returns true (and consumes one poll) if the table should still report
+    // `CREATING` on this `describeTable` call.
+    isolated function consumeActivationPoll() returns boolean {
+        lock {
+            if self.activationPollsRemaining <= 0 {
+                return false;
+            }
+            self.activationPollsRemaining -= 1;
+            return true;
+        }
     }
 
     isolated function tableExists(string tableName) returns boolean {
@@ -205,6 +258,11 @@ isolated client class FakeDynamoDbClient {
         if !storage.tableExists(tableName) {
             return error(string `ResourceNotFoundException: table '${tableName}' not found`);
         }
+        // When a test has armed activation polls, report the table as still
+        // creating so the store keeps polling in `waitForTableActive`.
+        if storage.consumeActivationPoll() {
+            return {TableName: tableName, TableStatus: dynamodb:CREATING};
+        }
         return {TableName: tableName, TableStatus: dynamodb:ACTIVE};
     }
 
@@ -348,6 +406,13 @@ isolated client class FakeDynamoDbClient {
     remote isolated function writeBatchItems(dynamodb:BatchItemInsertInput input)
             returns dynamodb:BatchItemInsertOutput|error {
         FakeStorage storage = getActiveStorage();
+        // Fault injection: while a test has armed unprocessed rounds, persist
+        // nothing and echo every request straight back as `UnprocessedItems`, so
+        // the store must retry the same chunk. Real DynamoDB does this under
+        // throttling; the store's `writeChunk` retry loop is what we exercise.
+        if storage.consumeUnprocessedRound() {
+            return {UnprocessedItems: input.RequestItems.clone()};
+        }
         foreach [string, dynamodb:WriteRequest[]] [tableName, requests] in input.RequestItems.entries() {
             if !storage.tableExists(tableName) {
                 return error(string `ResourceNotFoundException: table '${tableName}'`);

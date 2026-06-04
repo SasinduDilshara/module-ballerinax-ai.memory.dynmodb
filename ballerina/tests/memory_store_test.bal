@@ -827,6 +827,116 @@ function testPutAllAppendBatchPreservesOrder() returns error? {
 }
 
 // -----------------------------------------------------------------------------
+// Control-plane / retry branches.
+//
+// These paths cannot be reached against DynamoDB Local (which creates tables
+// instantly and never throttles a BatchWriteItem), so they are exercised here
+// by arming the fault-injection knobs on `FakeDynamoDbClient`.
+// -----------------------------------------------------------------------------
+
+@test:Config {}
+function testInitWaitsForTableToBecomeActive() returns error? {
+    var [fake, mocked] = newFakePair();
+    // Force the first DescribeTable *after* creation to report CREATING; the
+    // store must poll again (sleeping between polls) until it sees ACTIVE before
+    // init returns. One armed poll is enough to drive the loop's wait branch.
+    fake.setActivationPolls(1);
+
+    ShortTermMemoryStore store = check new ShortTermMemoryStore(mocked);
+
+    test:assertTrue(fake.hasTable(TABLE_NAME), "Table must be created during init");
+    // The store is fully usable the instant init returns, which proves init did
+    // not return until the table reported ACTIVE.
+    check store.put(K1, USER_INTRO);
+    check assertInteractiveMessages(store, K1, [USER_INTRO]);
+}
+
+@test:Config {}
+function testBatchWriteRetriesUnprocessedItems() returns error? {
+    var [fake, mocked] = newFakePair();
+    ShortTermMemoryStore store = check new (mocked);
+    // The first BatchWriteItem reports every item as unprocessed; the store must
+    // retry the chunk and ultimately persist all three messages in order.
+    fake.setUnprocessedRounds(1);
+
+    check store.put(K1, [USER_INTRO, ASSISTANT_GREETING, USER_WEATHER_Q]);
+
+    check assertInteractiveMessages(store, K1, [USER_INTRO, ASSISTANT_GREETING, USER_WEATHER_Q]);
+}
+
+@test:Config {}
+function testBatchWriteFailsAfterMaxRetries() returns error? {
+    var [fake, mocked] = newFakePair();
+    ShortTermMemoryStore store = check new (mocked);
+    // Every attempt keeps reporting unprocessed items, so the chunk never drains.
+    // The store must give up after MAX_BATCH_WRITE_RETRIES and surface an error
+    // rather than silently dropping the writes. (100 > the 1 + MAX retries the
+    // store performs, so the fault outlives every attempt.)
+    fake.setUnprocessedRounds(100);
+
+    Error? result = store.put(K1, [USER_INTRO, ASSISTANT_GREETING]);
+    test:assertTrue(result is Error, "put must fail when batch writes never drain");
+}
+
+@test:Config {}
+function testInitRejectsProvisionedWithNonPositiveCapacity() returns error? {
+    var [_, mocked] = newFakePair();
+    // Under PROVISIONED billing the store validates that both capacities are
+    // positive integers, returning an error before any AWS call is made.
+    Error|ShortTermMemoryStore zeroRead = new (mocked, tableConfig = {
+        billingMode: dynamodb:PROVISIONED, readCapacityUnits: 0, writeCapacityUnits: 5
+    });
+    test:assertTrue(zeroRead is Error, "Zero readCapacityUnits under PROVISIONED must be rejected");
+
+    Error|ShortTermMemoryStore zeroWrite = new (mocked, tableConfig = {
+        billingMode: dynamodb:PROVISIONED, readCapacityUnits: 5, writeCapacityUnits: 0
+    });
+    test:assertTrue(zeroWrite is Error, "Zero writeCapacityUnits under PROVISIONED must be rejected");
+
+    Error|ShortTermMemoryStore negative = new (mocked, tableConfig = {
+        billingMode: dynamodb:PROVISIONED, readCapacityUnits: -1, writeCapacityUnits: -1
+    });
+    test:assertTrue(negative is Error, "Negative capacities under PROVISIONED must be rejected");
+}
+
+@test:Config {}
+function testInitProvisionedWithValidCapacityCreatesTable() returns error? {
+    var [fake, mocked] = newFakePair();
+    // The positive-capacity PROVISIONED path must pass validation and create the
+    // table (the throughput is carried on the CreateTable input).
+    _ = check new ShortTermMemoryStore(mocked, tableConfig = {
+        billingMode: dynamodb:PROVISIONED, readCapacityUnits: 3, writeCapacityUnits: 2
+    });
+    test:assertTrue(fake.hasTable(TABLE_NAME), "PROVISIONED table with valid capacities must be created");
+}
+
+@test:Config {}
+function testInitWithCreateTableIfNotExistsFalseSkipsCreate() returns error? {
+    var [fake, mocked] = newFakePair();
+    test:assertFalse(fake.hasTable(TABLE_NAME), "Precondition: table must be absent");
+
+    // With auto-create disabled the store performs no control-plane calls during
+    // init: it neither describes nor creates the table.
+    _ = check new ShortTermMemoryStore(mocked, tableConfig = {createTableIfNotExists: false});
+
+    test:assertFalse(fake.hasTable(TABLE_NAME),
+        "init with createTableIfNotExists=false must not create the table");
+}
+
+@test:Config {}
+function testInitWithCreateTableIfNotExistsFalseUsesExistingTable() returns error? {
+    var [_, mocked] = newFakePair();
+    // Provision the table out of band first (as IaC would).
+    _ = check new ShortTermMemoryStore(mocked);
+
+    // A second store with auto-create disabled assumes the table already exists
+    // and operates against it without any control-plane call.
+    ShortTermMemoryStore store = check new (mocked, tableConfig = {createTableIfNotExists: false});
+    check store.put(K1, USER_INTRO);
+    check assertInteractiveMessages(store, K1, [USER_INTRO]);
+}
+
+// -----------------------------------------------------------------------------
 // Shared assertions.
 // -----------------------------------------------------------------------------
 
